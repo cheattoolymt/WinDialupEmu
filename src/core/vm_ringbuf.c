@@ -193,6 +193,7 @@ void vm_frb_reset(vm_frb_t *rb)
     if (!rb) return;
     rb->head = rb->tail = 0;
     rb->underruns = 0;
+    rb->idle_frames = 0;
 }
 
 uint32_t vm_frb_used(const vm_frb_t *rb)
@@ -266,9 +267,23 @@ uint32_t vm_frb_read_or_silence(vm_frb_t *rb, float *dst, uint32_t n)
     }
 
     if (got < n) {
-        /* アンダーラン: 残りを無音で埋める (ノイズを出さない) */
+        /* 残りを無音で埋める (ノイズを出さない) */
         memset(dst + got, 0, (size_t)(n - got) * sizeof(float));
-        rb->underruns += (n - got);
+
+        if (got == 0) {
+            /*
+             * リングが完全に空。モデムが何も生成していない正常な
+             * アイドル状態 (オンフック中や無音ステージ) なので
+             * グリッチではない。
+             */
+            rb->idle_frames += n;
+        } else {
+            /*
+             * 再生途中でデータが尽きた = 真のアンダーラン。
+             * 実機では「プツッ」と聞こえる。
+             */
+            rb->underruns += (n - got);
+        }
     }
     return got;
 }

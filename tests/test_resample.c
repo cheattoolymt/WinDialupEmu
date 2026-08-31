@@ -184,20 +184,24 @@ static void test_rate_accuracy(void)
         }
 
         /*
-         * 理論値からは「フィルタ群遅延ぶん」だけ少なく出るのが正しい。
-         * 線形位相 FIR の群遅延 (TAPS/2 - 1 入力サンプル) は固定値なので、
-         * これを引いた残差が 0 に近ければドリフトは無い。
+         * リサンプラのスループットは 1:1 でなければならない。
+         * 群遅延はレイテンシ (中身が遅れて出る) であって
+         * サンプル個数の欠損ではないので、ここでは引かない。
+         *
+         * 10 秒ぶん流して理論値との差が ±2 サンプル以内であれば
+         * 長期ドリフトは無い (Q32 アキュムレータの丸めのみ)。
+         * これを % で見ると 8000->8000 の 80000 サンプルでも
+         * 0.0025% 未満になる。
          */
-        expect = (double)(blk * nblk - rs.group_delay_in)
-                 * cases[c].out / cases[c].in;
+        expect = (double)(blk * nblk) * cases[c].out / cases[c].in;
         err_pct = fabs((double)total_out - expect) / expect * 100.0;
 
         snprintf(detail, sizeof(detail),
-                 "%d->%dHz: out=%d expect=%.0f (delay %d in-samp) err=%.5f%%",
+                 "%d->%dHz: out=%d expect=%.0f diff=%+.0f (latency %d in-samp) err=%.5f%%",
                  cases[c].in, cases[c].out, total_out, expect,
-                 rs.group_delay_in, err_pct);
+                 (double)total_out - expect, rs.group_delay_in, err_pct);
         check("output sample count matches rate ratio (no drift)",
-              err_pct < 0.01, detail);
+              fabs((double)total_out - expect) <= 2.0, detail);
 
         vm_resampler_free(&rs);
     }

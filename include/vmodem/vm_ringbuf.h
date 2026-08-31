@@ -119,7 +119,25 @@ typedef struct {
     uint32_t         mask;
     volatile uint32_t head;
     volatile uint32_t tail;
+
+    /*
+     * 「無音を出した」理由を 2 つに区別して数える。混ぜてはいけない。
+     *
+     *   underruns : 真のアンダーラン。要求 n に対して 0 < got < n、
+     *               つまり【再生途中でデータが尽きた】ケース。
+     *               これはプツッというグリッチとして耳に聞こえるので
+     *               0 でなければならない。
+     *
+     *   idle_frames : 要求時点でリングが完全に空だったケース (got == 0)。
+     *               モデムがオンフック/無音区間で何も生成していない
+     *               正常な状態であり、グリッチではない。
+     *
+     * この区別をせずに「無音を埋めた回数」を全部 underrun として数えると、
+     * アイドル中に延々とカウントが増えて指標として使えなくなる
+     * (実装当初これで誤検知した)。
+     */
     volatile uint32_t underruns;
+    volatile uint32_t idle_frames;
 } vm_frb_t;
 
 vm_err_t vm_frb_init(vm_frb_t *rb, uint32_t min_capacity);
