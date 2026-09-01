@@ -53,6 +53,52 @@
 #include <avrt.h>
 
 /*
+ * ===========================================================================
+ * 大文字小文字を無視した部分一致 (StrStrIA の置き換え)
+ * ===========================================================================
+ * 旧実装は shlwapi.h の StrStrIA() を使っていたが、以下の問題があった:
+ *
+ *   1. <shlwapi.h> を include しておらず、MinGW-w64 では
+ *          error: implicit declaration of function 'StrStrIA'
+ *      (C99 以降は暗黙宣言がエラー) になる。
+ *   2. include しても -lshlwapi が必要で、リンクライブラリが増える。
+ *   3. StrStrIA の「大文字小文字無視」は現在のロケールに依存するため、
+ *      日本語ロケールのデバイス名で意図しない一致をする可能性がある。
+ *
+ * やっている事は ASCII の部分一致だけなので、自前で書くのが最も確実。
+ * ロケールに依存しないよう tolower() ではなく手動で 'A'..'Z' を畳む
+ * (tolower() は locale 依存で、トルコ語ロケールの 'I' 問題などがある)。
+ * ===========================================================================
+ */
+static char vm_ascii_lower(char c)
+{
+    return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+static const char *vm_stristr(const char *hay, const char *needle)
+{
+    size_t i;
+
+    if (hay == NULL || needle == NULL)
+        return NULL;
+    if (needle[0] == '\0')
+        return hay;
+
+    for (; *hay != '\0'; hay++) {
+        for (i = 0; needle[i] != '\0'; i++) {
+            if (vm_ascii_lower(hay[i]) != vm_ascii_lower(needle[i]))
+                break;
+            if (hay[i] == '\0')
+                break;
+        }
+        if (needle[i] == '\0')
+            return hay;
+    }
+
+    return NULL;
+}
+
+/*
  * ---------------------------------------------------------------------
  * GUID の自前定義
  * ---------------------------------------------------------------------
@@ -301,8 +347,8 @@ static IMMDevice *pick_device(IMMDeviceEnumerator *en, const char *match,
                     if (FAILED(IMMDeviceCollection_Item(coll, i, &d)) || !d)
                         continue;
                     get_device_name(d, nm, (int)sizeof(nm));
-                    /* 大文字小文字を無視した部分一致 */
-                    if (StrStrIA(nm, match) != NULL) {
+                    /* 大文字小文字を無視した部分一致 (自前実装) */
+                    if (vm_stristr(nm, match) != NULL) {
                         result = d;
                         snprintf(name_out, (size_t)name_size, "%s", nm);
                         break;

@@ -216,6 +216,45 @@ static void build_ppp_cfg(const vm_modem_t *m, const vm_isp_entry_t *isp,
     if (c->ppp_dns2[0] && vm_ipv4_parse(c->ppp_dns2, &ip)) pc->dns2 = ip;
 
     /*
+     * ★ ここが「PPP は繋がるのに名前解決できない」原因のひとつ ★
+     *
+     * slirp バックエンドの DNS 代理は、宛先が vnameserver
+     * (既定 192.168.99.3) と **完全一致**した時だけ働く。
+     * 8.8.8.8 を配ると、DNS クエリは代理されずただの外部 UDP として
+     * NAT され、53/udp を塞ぐ環境や VPN 環境で解決できなくなる。
+     * (詳細な根拠は vm_nat_dns_ip() の実装コメント)
+     *
+     * よって slirp を使っている時は config の dns1 を無視し、
+     * NAT が持つ代理アドレスを配る。
+     *
+     * dns2 にも同じ代理アドレスを入れる。一見冗長だが理由がある:
+     *
+     *   - 代理は 1 つしか無いので、2 番目に別のアドレスを教えられない。
+     *   - かといって dns2 = 0 にすると vm_ppp は DNS2 オプションを
+     *     Config-Reject する。RAS は Reject を受けると設定を作り直して
+     *     もう 1 往復するため、接続完了が目に見えて遅くなる
+     *     (33.6kbps では 1 往復が数百 ms に効いてくる)。
+     *   - 同じアドレスを 2 つ配っても Windows は同一サーバを 2 回引くだけで、
+     *     動作上の不利益は無い。
+     *
+     * loopback / none バックエンドでは代理が無いので config の値を使う
+     * (どうせ外に出られないが、設定が効かないより分かりやすい)。
+     */
+    if (m->nat != NULL && vm_nat_active_backend(m->nat) == VM_NAT_SLIRP) {
+        uint32_t proxy = vm_nat_dns_ip(m->nat);
+        if (proxy != 0u) {
+            if (proxy != pc->dns1) {
+                char abuf[16];
+                VM_LOGI("ppp: DNS を slirp の代理 %s に差し替える "
+                        "(config の dns1/dns2 は slirp では代理されないため)",
+                        vm_ipv4_str(proxy, abuf, sizeof(abuf)));
+            }
+            pc->dns1 = proxy;
+            pc->dns2 = proxy;
+        }
+    }
+
+    /*
      * 認証は「config で要求されている」かつ「ISP エントリに
      * ユーザ名がある」場合のみ有効にする。
      * 片方だけ設定されている状態で PAP を要求すると、

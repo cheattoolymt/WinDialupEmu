@@ -21,14 +21,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * ★順序厳守★
+ * vm_winsock.h は winsock2.h -> ws2tcpip.h -> windows.h の順を保証する。
+ * windows.h を先に通すと古い winsock.h (Winsock 1.1) が入り、
+ * 後から winsock2.h を読んだ翻訳単位と型が食い違う。
+ * したがって **他のどのヘッダより先に** これを置く。
+ */
+#include "vmodem/vm_winsock.h"
+
 #include "vmodem/vm_modem.h"
 #include "vmodem/vm_config.h"
 #include "vmodem/vm_log.h"
 #include "vmodem/vm_nat.h"
 
-#ifdef _WIN32
-#  include <windows.h>
-#else
+#ifndef _WIN32
 #  include <signal.h>
 #endif
 
@@ -148,6 +155,30 @@ int main(int argc, char **argv)
     vm_log_init((vm_log_level_t)cfg.log_level,
                 cfg.log_file[0] ? cfg.log_file : NULL);
 
+    /* --- Winsock ---
+     *
+     * ★必ず vm_modem_create() より前★
+     *
+     * Windows では WSAStartup() を呼ぶまで socket() / sendto() /
+     * WSAPoll() が WSANOTINITIALISED (10093) で全部失敗する。
+     *
+     * libslirp も内部で WSAStartup(MAKEWORD(2, 0)) を呼ぶが、
+     *   - 要求バージョンが 2.0 で、WSAPoll は 2.2 の API
+     *   - atexit() で WSACleanup() する
+     * ため、我々が先に 2.2 で初期化し、自分の参照カウントを持つ。
+     * 詳細は include/vmodem/vm_winsock.h 冒頭「罠 2」。
+     *
+     * ログ初期化より後に置いているのは、失敗理由をログに残すため。
+     */
+    errbuf[0] = '\0';
+    if (vm_winsock_init(errbuf, sizeof(errbuf)) != 0) {
+        fprintf(stderr,
+                "エラー: Winsock を初期化できませんでした (%s)\n",
+                errbuf[0] ? errbuf : "理由不明");
+        VM_LOGE("winsock: 初期化失敗 (%s)", errbuf[0] ? errbuf : "理由不明");
+        return 1;
+    }
+
     VM_LOGI("VModem 起動 (config=%s port=%s net=%s isp=%d 件)",
             cfg_path, cfg.com_port, cfg.net_mode, cfg.isp_count);
     for (i = 0; i < cfg.isp_count; i++) {
@@ -169,6 +200,7 @@ int main(int argc, char **argv)
                 "確認してください (com0com のセットアップは\n"
                 "scripts/setup-com0com.ps1 を参照)。\n",
                 vm_strerror(rc), cfg.com_port);
+        vm_winsock_cleanup();
         return 1;
     }
 
@@ -189,6 +221,8 @@ int main(int argc, char **argv)
     VM_LOGI("最終状態: %s", vm_modem_status(g_modem, status, sizeof(status)));
     vm_modem_destroy(g_modem);
     g_modem = NULL;
+
+    vm_winsock_cleanup();
 
     return (rc == VM_OK) ? 0 : 1;
 }
