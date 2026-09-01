@@ -469,6 +469,41 @@ vm_nat_backend_t vm_nat_active_backend(const vm_nat_t *n)
     return (n != NULL) ? n->backend : VM_NAT_NONE;
 }
 
+uint32_t vm_nat_dns_ip(const vm_nat_t *n)
+{
+    /*
+     * ★なぜこのアクセサが必要なのか★
+     *
+     * PPP の IPCP はクライアント (Windows RAS) に DNS サーバのアドレスを
+     * 配る。従来はここに config.ini の dns1 = 8.8.8.8 をそのまま流していた。
+     *
+     * ところが libslirp の DNS 代理は、宛先が **vnameserver と完全一致**
+     * した時だけ働く (src/socket.c sotranslate_out4):
+     *
+     *     if (!s->disable_dns &&
+     *         so->so_faddr.s_addr == s->vnameserver_addr.s_addr) {
+     *         return (so->so_fport == htons(53) &&
+     *                 get_dns_addr(&sin->sin_addr, &sin->sin_port) >= 0);
+     *     }
+     *
+     * つまり 192.168.99.3:53 宛だけがホストの実 DNS
+     * (Windows では GetNetworkParams() で得た値) へ差し替えられる。
+     *
+     * 8.8.8.8 を配ると DNS クエリは「ただの外部 UDP」として NAT される。
+     * それでも本来は通るはずだが、次の理由で不利になる:
+     *
+     *   1. 企業/家庭のルータやプロバイダが外部 DNS (53/udp) を
+     *      ブロックまたは透過リダイレクトしている環境が珍しくない。
+     *   2. libslirp の DNS ソケットは SO_EXPIREFAST (10 秒) で回収される。
+     *      応答が遅い外部 DNS だと取りこぼしが増える。
+     *   3. ホストが VPN や社内 DNS を使っている場合、内部名が引けない。
+     *
+     * ゲストに vnameserver を教えれば、名前解決は必ずホストと同じ
+     * 経路・同じ結果になる。これが slirp を使う時の正しい作法。
+     */
+    return (n != NULL) ? n->cfg.dns_ip : 0u;
+}
+
 const char *vm_nat_status(const vm_nat_t *n, char *buf, size_t size)
 {
     if (buf == NULL || size == 0)

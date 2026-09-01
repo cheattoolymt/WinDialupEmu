@@ -1,0 +1,95 @@
+BSD 2-Clause License
+
+Copyright (c) 2026, cheattoolymt
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+================================================================================
+サードパーティ コンポーネントについて / Third-party components
+================================================================================
+
+本プロジェクトは以下の外部コンポーネントを利用します。
+上記 BSD-2-Clause は本プロジェクト自身のソースコードにのみ適用されます。
+
+--------------------------------------------------------------------------------
+libslirp  -  LGPL-2.1-or-later  (公開 API ヘッダのみ BSD-3-Clause)
+--------------------------------------------------------------------------------
+  https://gitlab.freedesktop.org/slirp/libslirp
+
+  用途 : ユーザモード TCP/IP NAT スタック (インターネットへの出口)
+  形態 : **動的リンク** (libslirp-0.dll / libslirp.dll.a)
+
+  ★ライセンス上の重要事項★
+
+  libslirp 本体は LGPL-2.1-or-later です。本プロジェクトは libslirp を
+  **動的リンクのみ**で利用しており、libslirp のソースコードを本リポジトリに
+  取り込んでいません。LGPL-2.1 第 6 条の要件 (利用者が libslirp を
+  差し替えられる状態を保つ) を満たすため、以下を遵守しています。
+
+    - libslirp を静的リンクしない
+    - libslirp のソースを本プロジェクトのソースに混在させない
+    - 利用者が libslirp-0.dll を任意のバージョンに差し替えられる
+      (本プロジェクトは実行時に slirp_version_string() を読み、
+       4.8.0 / 4.9.x のいずれでも動作するよう互換処理を行う)
+
+  この構成により、本プロジェクト自身のソースコードは BSD-2-Clause の
+  ままで配布できます。ただし libslirp-0.dll を同梱してバイナリ配布する
+  場合は、LGPL-2.1 の条文および libslirp の著作権表示を添付してください。
+
+  なお、本リポジトリが同梱する以下 2 ファイルは libslirp 由来の
+  **公開 API ヘッダ**であり、libslirp 側で BSD-3-Clause が明示されています
+  (ファイル冒頭の SPDX-License-Identifier: BSD-3-Clause を参照)。
+
+    include/libslirp.h
+    include/libslirp-version.h
+
+--------------------------------------------------------------------------------
+com0com  -  GPL-3.0
+--------------------------------------------------------------------------------
+  https://sourceforge.net/projects/com0com/
+
+  用途 : 仮想 COM ポート ペアの作成 (Windows のダイアルアップと本プログラムを
+         結ぶ「電話線」の役割)
+  形態 : **別プロセスのカーネル ドライバ**。本プログラムは com0com が作成した
+         COM ポートを CreateFile で開くだけであり、com0com のコードを
+         リンクも取り込みもしていません。
+
+  ★ライセンス上の重要事項★
+
+  com0com は GPL-3.0 ですが、本プログラムとは「OS が提供する COM ポートを
+  開く」という通常のシステムコール境界を介してのみ通信します。これは
+  GPL が想定する派生物の形成には当たりません (独立したプログラム同士が
+  OS の標準機構で通信しているだけ)。
+
+  したがって本プロジェクトのライセンスは影響を受けませんが、
+  **com0com 自体は各利用者が別途インストールする必要があります**。
+  本リポジトリは com0com のバイナリを同梱しません。
+
+--------------------------------------------------------------------------------
+Windows SDK / MinGW-w64 インポート ライブラリ
+--------------------------------------------------------------------------------
+  ws2_32 (Winsock2), iphlpapi (IP Helper), ole32 (COM), winmm (Multimedia)
+
+  用途 : OS 標準 API の利用。いずれも Windows に標準搭載されており、
+         再配布の必要はありません。

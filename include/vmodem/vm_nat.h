@@ -235,6 +235,18 @@ const char *vm_nat_status(const vm_nat_t *n, char *buf, size_t size);
 /* 実際に使われているバックエンド */
 vm_nat_backend_t vm_nat_active_backend(const vm_nat_t *n);
 
+/*
+ * NAT が用意した DNS 代理アドレス (ホストオーダ)。
+ *
+ * slirp バックエンドではこのアドレスの 53/udp 宛だけが
+ * ホストの実 DNS サーバへ差し替えられる。したがって PPP の IPCP で
+ * ゲストに配る DNS はこの値でなければならない。
+ * 詳しい理屈は src/net/vm_nat.c の実装コメントを参照。
+ *
+ * n == NULL の時は 0 を返す。
+ */
+uint32_t vm_nat_dns_ip(const vm_nat_t *n);
+
 /* 単調増加ナノ秒クロック (難所 6)。バックエンド実装からも使う。 */
 int64_t vm_nat_now_ns(void);
 
