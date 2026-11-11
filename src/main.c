@@ -197,8 +197,8 @@ int main(int argc, char **argv)
         fprintf(stderr,
                 "エラー: モデムを初期化できませんでした (%s)\n"
                 "COM ポート '%s' が存在し、他のプロセスが開いていないか\n"
-                "確認してください (com0com のセットアップは\n"
-                "scripts/setup-com0com.ps1 を参照)。\n",
+                "確認してください。上のログで NAT / WFP の失敗が出ている場合は\n"
+                "LAN / Wi-Fi、libslirp、および管理者権限も確認してください。\n",
                 vm_strerror(rc), cfg.com_port);
         vm_winsock_cleanup();
         return 1;

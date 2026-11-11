@@ -23,6 +23,7 @@
 #include "vmodem/vm_ppp.h"
 #include "vmodem/vm_nat.h"
 #include "vmodem/vm_log.h"
+#include "vmodem/vm_netguard.h"
 
 #ifdef _WIN32
 #  include <windows.h>
@@ -58,6 +59,7 @@ struct vm_modem_s {
     vm_serial_t   *ser;
     vm_audio_t    *aud;
     vm_nat_t      *nat;
+    vm_netguard_t *netguard;
 
     vm_at_t        at;
     vm_sequence_t  seq;
@@ -79,6 +81,7 @@ struct vm_modem_s {
 
     /* 停止要求 (シグナルハンドラから触るので volatile) */
     volatile int stop;
+    vm_err_t failure;
 
     vm_modem_stats_t stats;
 
@@ -154,7 +157,12 @@ static void cb_ppp_ip(void *user, const uint8_t *pkt, int len)
 {
     vm_modem_t *m = (vm_modem_t *)user;
     if (m->nat == NULL) return;
-    (void)vm_nat_input_ip(m->nat, pkt, len);
+    vm_err_t rc = vm_nat_input_ip(m->nat, pkt, len);
+    if (rc == VM_ERR_IO || rc == VM_ERR_STATE) {
+        VM_LOGE("modem: NAT 送信エラー。接続を終了します");
+        m->failure = rc;
+        m->stop = 1;
+    }
 }
 
 /* --------------------------------------------------------------------------
@@ -215,44 +223,9 @@ static void build_ppp_cfg(const vm_modem_t *m, const vm_isp_entry_t *isp,
     if (c->ppp_dns1[0] && vm_ipv4_parse(c->ppp_dns1, &ip)) pc->dns1 = ip;
     if (c->ppp_dns2[0] && vm_ipv4_parse(c->ppp_dns2, &ip)) pc->dns2 = ip;
 
-    /*
-     * ★ ここが「PPP は繋がるのに名前解決できない」原因のひとつ ★
-     *
-     * slirp バックエンドの DNS 代理は、宛先が vnameserver
-     * (既定 192.168.99.3) と **完全一致**した時だけ働く。
-     * 8.8.8.8 を配ると、DNS クエリは代理されずただの外部 UDP として
-     * NAT され、53/udp を塞ぐ環境や VPN 環境で解決できなくなる。
-     * (詳細な根拠は vm_nat_dns_ip() の実装コメント)
-     *
-     * よって slirp を使っている時は config の dns1 を無視し、
-     * NAT が持つ代理アドレスを配る。
-     *
-     * dns2 にも同じ代理アドレスを入れる。一見冗長だが理由がある:
-     *
-     *   - 代理は 1 つしか無いので、2 番目に別のアドレスを教えられない。
-     *   - かといって dns2 = 0 にすると vm_ppp は DNS2 オプションを
-     *     Config-Reject する。RAS は Reject を受けると設定を作り直して
-     *     もう 1 往復するため、接続完了が目に見えて遅くなる
-     *     (33.6kbps では 1 往復が数百 ms に効いてくる)。
-     *   - 同じアドレスを 2 つ配っても Windows は同一サーバを 2 回引くだけで、
-     *     動作上の不利益は無い。
-     *
-     * loopback / none バックエンドでは代理が無いので config の値を使う
-     * (どうせ外に出られないが、設定が効かないより分かりやすい)。
-     */
-    if (m->nat != NULL && vm_nat_active_backend(m->nat) == VM_NAT_SLIRP) {
-        uint32_t proxy = vm_nat_dns_ip(m->nat);
-        if (proxy != 0u) {
-            if (proxy != pc->dns1) {
-                char abuf[16];
-                VM_LOGI("ppp: DNS を slirp の代理 %s に差し替える "
-                        "(config の dns1/dns2 は slirp では代理されないため)",
-                        vm_ipv4_str(proxy, abuf, sizeof(abuf)));
-            }
-            pc->dns1 = proxy;
-            pc->dns2 = proxy;
-        }
-    }
+    /* Use the configured upstream DNS servers directly through NAT. Asking
+     * libslirp to discover the host DNS after RAS connects can select this
+     * very PPP connection's DNS proxy and recursively send queries to itself. */
 
     /*
      * 認証は「config で要求されている」かつ「ISP エントリに
@@ -350,21 +323,26 @@ vm_err_t vm_modem_create(vm_modem_t **out, const vm_config_t *cfg)
         VM_LOGI("modem: audio_enable=false のため音声を開かない");
     }
 
-    /* --- NAT (失敗したら LOOPBACK に落とす) --- */
+    /* A requested Internet backend must actually work. A loopback fallback
+     * looks like a successful dial-up connection with no Internet access. */
     build_nat_cfg(m, &nc);
     if (nc.backend != VM_NAT_NONE) {
-        if (vm_nat_create(&m->nat, &nc, cb_nat_ip, m) != VM_OK) {
-            VM_LOGW("modem: NAT バックエンド '%s' が使えない。"
-                    "内蔵ループバックに切り替える",
-                    vm_nat_backend_name(nc.backend));
-            nc.backend = VM_NAT_LOOPBACK;
-            if (vm_nat_create(&m->nat, &nc, cb_nat_ip, m) != VM_OK)
-                m->nat = NULL;
+        rc = vm_nat_create(&m->nat, &nc, cb_nat_ip, m);
+        if (rc != VM_OK) {
+            VM_LOGE("modem: NAT 初期化失敗。接続できない状態での起動を中止します");
+            vm_modem_destroy(m);
+            return rc;
         }
-        if (m->nat != NULL)
-            VM_LOGI("modem: NAT = %s",
-                    vm_nat_backend_name(vm_nat_active_backend(m->nat)));
     }
+#ifdef _WIN32
+    if (nc.backend == VM_NAT_SLIRP) {
+        rc = vm_netguard_open(&m->netguard);
+        if (rc != VM_OK) {
+            vm_modem_destroy(m);
+            return rc;
+        }
+    }
+#endif
 
     /* --- AT 解釈器 --- */
     vm_at_init(&m->at, cfg);
@@ -395,6 +373,7 @@ void vm_modem_destroy(vm_modem_t *m)
         set_dcd(m, false);
         vm_serial_close(m->ser);
     }
+    vm_netguard_close(m->netguard);
     free(m);
 }
 
@@ -799,7 +778,7 @@ vm_err_t vm_modem_run(vm_modem_t *m)
     }
     VM_LOGI("modem: 停止要求を受けた");
     if (m->state != VM_MODEM_COMMAND) do_hangup(m, false);
-    return VM_OK;
+    return m->failure;
 }
 
 void vm_modem_request_stop(vm_modem_t *m)

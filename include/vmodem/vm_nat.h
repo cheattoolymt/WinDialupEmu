@@ -194,7 +194,7 @@ typedef struct vm_nat_s vm_nat_t;
 
 /*
  * 生成。cfg.backend が利用不可なら VM_ERR_UNSUPPORTED を返す
- * (呼び出し側は VM_NAT_LOOPBACK にフォールバックしてよい)。
+ * (インターネット接続を要求する呼び出し側は、この失敗を通知すること)。
  */
 vm_err_t vm_nat_create(vm_nat_t **out, const vm_nat_cfg_t *cfg,
                        vm_nat_ip_cb cb, void *user);
@@ -235,16 +235,9 @@ const char *vm_nat_status(const vm_nat_t *n, char *buf, size_t size);
 /* 実際に使われているバックエンド */
 vm_nat_backend_t vm_nat_active_backend(const vm_nat_t *n);
 
-/*
- * NAT が用意した DNS 代理アドレス (ホストオーダ)。
- *
- * slirp バックエンドではこのアドレスの 53/udp 宛だけが
- * ホストの実 DNS サーバへ差し替えられる。したがって PPP の IPCP で
- * ゲストに配る DNS はこの値でなければならない。
- * 詳しい理屈は src/net/vm_nat.c の実装コメントを参照。
- *
- * n == NULL の時は 0 を返す。
- */
+/* Reserved virtual DNS address (host order), or zero for NULL. The modem
+ * advertises config.ini's upstream DNS instead; host DNS discovery after RAS
+ * connects can otherwise select the emulated connection's own DNS proxy. */
 uint32_t vm_nat_dns_ip(const vm_nat_t *n);
 
 /* 単調増加ナノ秒クロック (難所 6)。バックエンド実装からも使う。 */

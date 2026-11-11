@@ -71,7 +71,6 @@ static bool iftype_is_real_nic(DWORD iftype)
     switch (iftype) {
     case IF_TYPE_ETHERNET_CSMACD:   /* 有線 LAN            */
     case IF_TYPE_IEEE80211:         /* 無線 LAN            */
-    case IF_TYPE_IEEE1394:          /* FireWire            */
         return true;
     case IF_TYPE_PPP:               /* ← まさに我々の RAS  */
     case IF_TYPE_SOFTWARE_LOOPBACK:
@@ -335,9 +334,33 @@ uint32_t vm_hostroute_pick_outbound_ip(uint32_t exclude_net,
     }
 
     VM_LOGW("hostroute: 外向きに使えるホストアドレスを特定できなかった。"
-            "outbound_addr を設定せずに続行する "
-            "(RAS がデフォルト経路を奪うと通信できない恐れがある)");
+            "NAT の初期化を中止する");
     return 0;
+}
+
+/* The index is needed by IP_UNICAST_IF; binding a source address alone does
+ * not select an interface in Windows' destination-based route lookup. */
+uint32_t vm_hostroute_interface_index(uint32_t ip)
+{
+    MIB_IPADDRTABLE *table = NULL;
+    ULONG bytes = 0, i;
+    DWORD rc;
+    uint32_t index = 0;
+    rc = GetIpAddrTable(NULL, &bytes, FALSE);
+    if (rc != ERROR_INSUFFICIENT_BUFFER) return 0;
+    table = malloc(bytes);
+    if (!table) return 0;
+    rc = GetIpAddrTable(table, &bytes, FALSE);
+    if (rc == NO_ERROR) {
+        for (i = 0; i < table->dwNumEntries; ++i) {
+            if (ntohl(table->table[i].dwAddr) == ip) {
+                index = table->table[i].dwIndex;
+                break;
+            }
+        }
+    }
+    free(table);
+    return index;
 }
 
 #else /* !_WIN32 */
@@ -346,14 +369,16 @@ uint32_t vm_hostroute_pick_outbound_ip(uint32_t exclude_net,
                                        uint32_t exclude_mask,
                                        char *name_out, size_t name_size)
 {
-    /*
-     * POSIX ではこの問題は起きない。
-     * Linux は weak host model で、かつ本プロジェクトの想定環境は
-     * Windows なので、何もせず 0 (= outbound_addr を使わない) を返す。
-     */
+    /* Windows-specific physical NIC selection is unnecessary in POSIX tests. */
     (void)exclude_net; (void)exclude_mask;
     if (name_out != NULL && name_size > 0)
         name_out[0] = '\0';
+    return 0;
+}
+
+uint32_t vm_hostroute_interface_index(uint32_t ip)
+{
+    (void)ip;
     return 0;
 }
 

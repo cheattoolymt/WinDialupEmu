@@ -224,6 +224,8 @@ typedef struct {
      */
     struct sockaddr_in outbound;
     bool               outbound_valid;
+    uint32_t           outbound_ifindex;
+    bool               socket_error;
 } slirp_impl_t;
 
 /* ==========================================================================
@@ -321,12 +323,9 @@ static void slirp_probe_abi(void)
             break;
         }
     }
-#elif VM_SLIRP_HAVE_SOCKET_API
-    /*
-     * POSIX では ELF の遅延束縛のおかげで Windows のような
-     * 起動時全滅は起きない。ヘッダが新しければそのまま使う。
-     */
-    g_slirp_abi.fill_socket = slirp_pollfds_fill_socket;
+#else
+    /* POSIX file descriptors are int. The legacy API also works when the
+     * bundled 4.9 header is used with a 4.8 shared library. */
 #endif
 
     VM_LOGI("nat(slirp): DLL バージョン %s (cfg.version 上限=%u, "
@@ -632,9 +631,29 @@ static void cb_timer_mod(void *timer, int64_t expire_time_ms, void *opaque)
  * POSIX で意味を持つのは「この fd を epoll に足しておけ」という
  * ヒントを与えたい実装向け。我々は毎回 fill でリストを作り直すので不要。
  */
+/* Registration occurs before TCP connect / UDP send in libslirp 4.8/4.9.
+ * IP_UNICAST_IF takes a network-byte-order interface index on Windows. */
+static void pin_outbound_socket(uintptr_t socket, void *opaque)
+{
+#ifdef _WIN32
+    slirp_impl_t *si = opaque;
+    DWORD index = htonl(si->outbound_ifindex);
+    if (setsockopt((SOCKET)socket, IPPROTO_IP, IP_UNICAST_IF,
+                   (const char *)&index, sizeof(index)) == SOCKET_ERROR) {
+        VM_LOGE("nat(slirp): IP_UNICAST_IF failed: %d", WSAGetLastError());
+        si->socket_error = true;
+        /* libslirp owns the socket: closing it here would cause a later double
+         * close, possibly affecting a recycled handle. The caller stops the
+         * modem as soon as slirp_input returns. */
+    }
+#else
+    (void)socket; (void)opaque;
+#endif
+}
+
 static void cb_register_poll_fd(int fd, void *opaque)
 {
-    (void)fd; (void)opaque;
+    pin_outbound_socket((uintptr_t)(unsigned int)fd, opaque);
 }
 
 static void cb_unregister_poll_fd(int fd, void *opaque)
@@ -651,7 +670,7 @@ static void cb_unregister_poll_fd(int fd, void *opaque)
  */
 static void cb_register_poll_socket(slirp_os_socket socket, void *opaque)
 {
-    (void)socket; (void)opaque;
+    pin_outbound_socket((uintptr_t)socket, opaque);
 }
 
 static void cb_unregister_poll_socket(slirp_os_socket socket, void *opaque)
@@ -982,119 +1001,32 @@ static vm_err_t slirp_be_open(vm_nat_t *n)
     cfg.disable_host_loopback = n->cfg.disable_host_loopback;
     cfg.enable_emu           = false;      /* 非推奨機能。使わない */
 
-    /* ======================================================================
-     * ★★★ ここが「PPP は繋がるのにインターネットに出られない」の本命 ★★★
-     * ======================================================================
-     *
-     * 【症状】
-     *   nat tx: 192.168.99.2 > 8.8.8.8 UDP 69B      ← 大量に出ている
-     *   nat rx: 192.168.99.1 > 192.168.99.2 ICMP 97B ← ICMP だけ返る
-     *   8.8.8.8 からの応答は一切無い。TCP も同様。
-     *
-     * 【この 97B が決定的な証拠になる】
-     *   libslirp の ICMP エラー生成 (src/ip_icmp.c):
-     *     L312  #define ICMP_MAXDATALEN (IP_MSS - 28)      = 576 - 28 = 548
-     *     L388  s_ip_len = MIN(orig_ip_len, ICMP_MAXDATALEN);
-     *     L392  m->m_len = ICMP_MINLEN + s_ip_len;
-     *     L42   #define WITH_ICMP_ERROR_MSG 0   ← 文字列は付かない
-     *   よって
-     *     IP ヘッダ(20) + ICMP ヘッダ(8) + 元パケット(69) = 97
-     *   と **ぴったり一致**する。返ってきた ICMP は
-     *   「我々が送った 69B の UDP に対する Destination Unreachable」である。
-     *
-     * 【どこが発行したのか】
-     *   UDP で ICMP_UNREACH を出す箇所は 2 つしかない。
-     *     (A) src/udp.c:233     sosendto() が失敗した時   ← 送信失敗
-     *     (B) src/socket.c:687  recvfrom() が失敗した時   ← 受信失敗
-     *   8.8.8.8 から何も返って来ていない = POLLIN が立たない
-     *   = recvfrom が呼ばれる事すら無い。よって (B) は原理的に不可能。
-     *   ⇒ **sendto() がその場で失敗している** と確定する。
-     *   (src/util.c:223  case WSAENETUNREACH: return ENETUNREACH;)
-     *
-     * 【なぜ sendto が失敗するのか】
-     *   Windows の RAS は、ダイアルアップ接続が確立すると既定で
-     *       0.0.0.0/0 → 192.168.99.1 (PPP インタフェース)
-     *   というデフォルト経路を追加する
-     *   (「リモート ネットワークでデフォルト ゲートウェイを使う」)。
-     *   VPN を繋ぐと全通信が VPN に入るのと全く同じ挙動である。
-     *
-     *   その結果、**我々自身のプロセス**が libslirp 経由で
-     *   sendto(8.8.8.8) を発行すると、OS はその経路表に従って
-     *   「PPP インタフェースへ送れ」と判断する。
-     *   つまり自分が作った仮想回線に自分で送り返す自己参照ループになる。
-     *   Windows はこれを検出して即座に
-     *   WSAENETUNREACH / WSAEHOSTUNREACH / WSAEADDRNOTAVAIL を返す。
-     *   パケットは NIC から 1 バイトも出ていない。
-     *
-     * 【対策】
-     *   送信ソケットを **ホストの実 NIC のアドレスに bind** する。
-     *   Windows は Vista 以降 IPv4 で strong host model を既定とするため
-     *   (RFC 6419)、送信元アドレスを固定すると出力インタフェースも
-     *   そのアドレスを持つ実 NIC に固定される。
-     *   これで PPP へのデフォルト経路を迂回できる。
-     *
-     *   SlirpConfig.outbound_addr (version >= 2) がまさにこの用途で、
-     *   libslirp は全ての外向きソケットに対して
-     *   slirp_bind_outbound() → bind() を行う。
-     *
-     * 【2 つの落とし穴】
-     *   1. libslirp は outbound_addr を **ポインタのまま保持する**
-     *      (src/slirp.c:690)。コピーされない。
-     *      → 実体は si (Slirp と同寿命) の中に置く。スタックは不可。
-     *   2. cfg.version >= 2 でなければ読まれない (src/slirp.c:689)。
-     *      → 上の version 決定ロジックで 2 を死守している。
-     *
-     * 【呼ぶタイミング】
-     *   vm_nat_create() は vm_modem_create() の中、つまり
-     *   **ダイアルアップ確立より前**に呼ばれる。
-     *   まだ RAS の経路が入っていないので GetBestRoute が実 NIC を返す。
-     *   (念のため vm_hostroute 側でも IF_TYPE_PPP を弾いている)
-     * ====================================================================== */
+    /* Keep the source sockaddr alive for as long as libslirp. Also pin each
+     * newly registered socket to the NIC before it sends its first packet. */
     {
-        char     ifname[128];
-        uint32_t out_ip;
-
-        ifname[0] = '\0';
-
-        /*
-         * 我々の仮想ネットワーク (既定 192.168.99.0/24) は除外する。
-         * そこに bind したら結局自分に送る事になる。
-         */
-        out_ip = vm_hostroute_pick_outbound_ip(n->cfg.network, n->cfg.netmask,
-                                               ifname, sizeof(ifname));
-
-        if (out_ip != 0u) {
-            memset(&si->outbound, 0, sizeof(si->outbound));
-            si->outbound.sin_family      = AF_INET;
+        char ifname[128];
+        uint32_t out_ip = vm_hostroute_pick_outbound_ip(n->cfg.network,
+                                   n->cfg.netmask, ifname, sizeof(ifname));
+#ifdef _WIN32
+        si->outbound_ifindex = vm_hostroute_interface_index(out_ip);
+        if (!out_ip || !si->outbound_ifindex) {
+            VM_LOGE("nat(slirp): 有線 LAN / Wi-Fi の送信経路を検出できません");
+            free(si);
+            return VM_ERR_NOTFOUND;
+        }
+#endif
+        if (out_ip) {
+            si->outbound.sin_family = AF_INET;
             si->outbound.sin_addr.s_addr = htonl(out_ip);
-            si->outbound.sin_port        = 0;   /* ポートは OS に任せる */
-            si->outbound_valid           = true;
-
-            /* ★ポインタ渡し。実体は si の中にあるので寿命は安全★ */
+            si->outbound_valid = true;
             cfg.outbound_addr = &si->outbound;
-
-            VM_LOGI("nat(slirp): 外向きソケットを %u.%u.%u.%u (%s) に bind する "
-                    "(RAS のデフォルト経路による自己参照ループを回避)",
-                    (unsigned)((out_ip >> 24) & 0xFFu),
-                    (unsigned)((out_ip >> 16) & 0xFFu),
-                    (unsigned)((out_ip >> 8) & 0xFFu),
-                    (unsigned)(out_ip & 0xFFu),
-                    (ifname[0] != '\0') ? ifname : "?");
-        } else {
-            /*
-             * 特定できなかった場合は outbound_addr を設定しない。
-             * 従来通りの動作 (= OS の経路表任せ) になるので、
-             * RAS がデフォルト経路を奪っていると繋がらない可能性がある。
-             * その時の逃げ道を明示的に案内する。
-             */
-            si->outbound_valid = false;
-            VM_LOGW("nat(slirp): ホストの外向きアドレスを特定できなかった。"
-                    "インターネットに出られない場合は、ダイアルアップ接続の "
-                    "プロパティ → ネットワーク → TCP/IPv4 → 詳細設定 で "
-                    "「リモート ネットワークでデフォルト ゲートウェイを使う」の "
-                    "チェックを外す事");
+            VM_LOGI("nat(slirp): outbound=%s ifindex=%lu", ifname,
+                    (unsigned long)si->outbound_ifindex);
         }
     }
+    /* DNS is supplied explicitly by PPP, avoiding host DNS discovery after
+     * RAS has installed its own DNS server and default route. */
+    cfg.disable_dns = true;
 
     si->slirp = slirp_new(&cfg, &slirp_cb, si);
     if (si->slirp == NULL) {
@@ -1149,6 +1081,8 @@ static vm_err_t slirp_be_send_frame(vm_nat_t *n, const uint8_t *frame, int len)
     if (si == NULL || si->slirp == NULL)
         return VM_ERR_STATE;
 
+    if (si->socket_error) return VM_ERR_IO;
+
     /*
      * slirp_input は void。失敗を通知しない。
      * 内部で長さ不足なら黙って捨てるので、こちらで検算しておく。
@@ -1157,7 +1091,7 @@ static vm_err_t slirp_be_send_frame(vm_nat_t *n, const uint8_t *frame, int len)
         return VM_ERR_INVAL;
 
     slirp_input(si->slirp, frame, len);
-    return VM_OK;
+    return si->socket_error ? VM_ERR_IO : VM_OK;
 }
 
 /* --------------------------------------------------------------------------

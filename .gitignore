@@ -1,5 +1,6 @@
 # ビルド成果物
 build/
+work/
 build-*/
 *.o
 *.obj

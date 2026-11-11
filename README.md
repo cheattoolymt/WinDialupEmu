@@ -73,7 +73,7 @@ pacman -S mingw-w64-x86_64-libslirp
 MinGW-w64 の環境で、リポジトリのルートで以下を実行します（1 行）。
 
 ```bash
-gcc -O2 -std=c99 -Wall -Wextra -Iinclude -DVMODEM_HAVE_LIBSLIRP src/main.c src/core/vm_config.c src/core/vm_log.c src/core/vm_ringbuf.c src/core/vm_types.c src/audio/vm_audio.c src/audio/vm_audio_null.c src/audio/vm_audio_wasapi.c src/dsp/vm_handshake.c src/dsp/vm_resample.c src/dsp/vm_tone.c src/dsp/vm_v34.c src/dsp/vm_v8.c src/modem/vm_at.c src/modem/vm_modem.c src/modem/vm_sequence.c src/net/vm_eth.c src/net/vm_hdlc.c src/net/vm_hostroute.c src/net/vm_nat.c src/net/vm_nat_loopback.c src/net/vm_nat_slirp.c src/net/vm_ppp.c src/net/vm_winsock.c src/serial/vm_serial.c src/serial/vm_serial_win32.c -o vmodem.exe -L. -lslirp -lws2_32 -liphlpapi -lole32 -lwinmm -lm
+gcc -O2 -std=c99 -Wall -Wextra -Iinclude -DVMODEM_HAVE_LIBSLIRP src/main.c src/core/vm_config.c src/core/vm_log.c src/core/vm_ringbuf.c src/core/vm_types.c src/audio/vm_audio.c src/audio/vm_audio_null.c src/audio/vm_audio_wasapi.c src/dsp/vm_handshake.c src/dsp/vm_resample.c src/dsp/vm_tone.c src/dsp/vm_v34.c src/dsp/vm_v8.c src/modem/vm_at.c src/modem/vm_modem.c src/modem/vm_sequence.c src/net/vm_eth.c src/net/vm_hdlc.c src/net/vm_hostroute.c src/net/vm_netguard.c src/net/vm_nat.c src/net/vm_nat_loopback.c src/net/vm_nat_slirp.c src/net/vm_ppp.c src/net/vm_winsock.c src/serial/vm_serial.c src/serial/vm_serial_win32.c -o vmodem.exe -L. -lslirp -lws2_32 -liphlpapi -lole32 -lwinmm -lfwpuclnt -lm
 ```
 
 ### リンクするライブラリの理由
@@ -83,6 +83,7 @@ gcc -O2 -std=c99 -Wall -Wextra -Iinclude -DVMODEM_HAVE_LIBSLIRP src/main.c src/c
 | `-lslirp` | libslirp (ユーザモード NAT) |
 | `-lws2_32` | Winsock2。`WSAStartup` / `WSAPoll` |
 | `-liphlpapi` | IP Helper。`GetBestRoute` / `GetAdaptersAddresses` (経路検出) |
+| `-lfwpuclnt` | Windows Filtering Platform。一時的な LAN / Wi-Fi 利用制限 |
 | `-lole32` | COM。WASAPI の初期化 |
 | `-lwinmm` | マルチメディア タイマ |
 | `-lm` | 数学関数 (音声合成) |
@@ -117,13 +118,34 @@ com0com のセットアップ GUI で `CNCA0` ↔ `CNCB0` のペアを作成し�
 設定 → ネットワーク → ダイヤルアップ →
 電話番号に `config.ini` に書いた番号 (既定は `0120-000-0000`) を入力。
 
-### 4. VModem を起動してから接続
+### 4. 管理者として VModem を起動してから接続
 
 ```bash
 vmodem.exe
 ```
 
-起動後に Windows 側で「接続」を押します。
+`mode = slirp` は管理者権限と Windows の **Base Filtering Engine (BFE)**
+サービスが必要です。NAT や通信制限を初期化できない場合は起動を中止し、
+「繋がったように見えるだけ」のループバック接続へは切り替えません。
+
+起動後に Windows 側で「接続」を押します。RAS の IPv4 詳細設定で
+**「リモート ネットワークでデフォルト ゲートウェイを使う」を有効**にしてください。
+
+### LAN / Wi-Fi の専用利用と解除
+
+`mode = slirp` では、起動完了から終了まで Ethernet / Wi-Fi 上の通常の
+アプリ通信を IPv4 / IPv6 ともに制限します。VModem の実行ファイルだけが
+物理回線へ直接通信でき、他のアプリは RAS (PPP) 経由で IPv4 通信します。
+全 Ethernet / Wi-Fi インターフェースに適用するため、別の LAN や IPv6 への
+迂回も制限します。物理アダプタ自体は有効なままです。
+localhost と DHCP の維持通信は例外です。独自の VPN / 仮想アダプタを通る経路の
+制御は対象外です。
+
+- ダイアル前・RAS 切断後も、VModem 起動中は通常アプリから直接接続できません。
+- **Ctrl-C で VModem を終了すると制限が解除され、LAN / Wi-Fi の通常利用に戻ります。**
+- WFP の動的セッションなので、プロセスの強制終了やクラッシュ時も Windows が
+  フィルタを回収します。アダプタ設定・経路表・永続ファイアウォール設定は変更しません。
+- `loopback` / `none` は通信検証専用で、物理回線の制限を行いません。
 
 ---
 
@@ -171,13 +193,14 @@ protocol = V34PLUS          ; V21 V22 V22BIS V32 V32BIS V34 V34PLUS V90
 
 ### DNS について
 
-`mode = slirp` の時、`dns1` / `dns2` は **libslirp の内蔵 DNS プロキシの
-アドレスで自動的に上書き**されます (既定 `192.168.99.3`)。
+`dns1` / `dns2` は RAS にそのまま通知し、NAT 経由で利用します。
+既定値は `8.8.8.8` / `8.8.4.4` です。外部 DNS が制限されているネットワークでは、
+ルーターなど実際に利用できる DNS サーバーの IPv4 アドレスを設定してください。
 
-これは libslirp の仕様上必須です。libslirp は宛先が `vnameserver` と
-**完全に一致する時だけ** DNS を代理してくれます
-(`src/socket.c` の `sotranslate_out4`)。`8.8.8.8` をそのままゲストに教えると、
-libslirp はそれを「ただの外部宛 UDP」として扱い、NAT の外に出そうとして失敗します。
+以前の実装は DNS を仮想プロキシ `192.168.99.3` へ強制的に上書きしていました。
+同一 PC の RAS がその DNS をホストへ登録すると、libslirp のホスト DNS 自動検出が
+仮想プロキシ自身を選び、名前解決が自己参照する可能性があります。
+現在はホスト DNS の自動検出・仮想 DNS プロキシを使いません。
 
 ---
 
@@ -185,47 +208,22 @@ libslirp はそれを「ただの外部宛 UDP」として扱い、NAT の外に
 
 ### PPP は繋がるのにインターネットに出られない
 
-**本バージョンで修正済みの症状です。** 参考のため原因を記録します。
+RAS の接続状態だけでは NAT の疎通は確認できません。次を確認してください。
 
-Windows の RAS はダイアルアップ接続が確立すると、既定で
+1. `mode = slirp` でビルドし、libslirp DLL を配置する。
+   NAT 初期化失敗時はエラーで終了します。`loopback` / `none` にインターネット機能はありません。
+2. 管理者として、利用できる LAN / Wi-Fi に接続した状態で起動する。
+   起動ログの `outbound=... ifindex=...` に物理インターフェースが表示されること。
+3. RAS のデフォルトゲートウェイを有効にする。無効だと通常アプリの直接通信は
+   制限されるため、PPP を経由できません。
+4. IP 宛の TCP 接続は通るが名前解決が失敗する場合は `[ppp] dns1` / `dns2` を確認する。
+   Windows の「インターネットなし」という表示だけで判断せず、実際の名前解決と HTTPS 接続で確認する。
 
-```
-0.0.0.0/0 → 192.168.99.1 (PPP インタフェース)
-```
-
-というデフォルト経路を追加します (「リモート ネットワークでデフォルト
-ゲートウェイを使う」)。VPN を繋ぐと全通信が VPN に入るのと同じ挙動です。
-
-その結果、**VModem 自身**が libslirp 経由で `sendto(8.8.8.8)` を発行すると、
-OS は経路表に従って「PPP インタフェースへ送れ」と判断します。つまり自分が
-作った仮想回線に自分で送り返す**自己参照ループ**になり、Windows は即座に
-`WSAENETUNREACH` を返します。パケットは NIC から 1 バイトも出ていません。
-
-このとき libslirp は送信失敗を ICMP Destination Unreachable としてゲストに
-返すため、ログには次のように「送信だけがひたすら出て ICMP だけが返る」という
-特徴的なパターンが現れます。
-
-```
-nat tx: 192.168.99.2 > 8.8.8.8 UDP 69B      ← 大量に出る
-nat rx: 192.168.99.1 > 192.168.99.2 ICMP 97B ← ICMP だけ返る
-```
-
-**対策 (実装済み)**
-起動時に `GetBestRoute` と `GetAdaptersAddresses` でホストの実 NIC の
-アドレスを検出し、`SlirpConfig.outbound_addr` に設定します。libslirp は
-全ての外向きソケットをこのアドレスに `bind()` するため、Windows の
-strong host model (RFC 6419, Vista 以降 IPv4 の既定) により送信インタフェースが
-実 NIC に固定され、PPP へのデフォルト経路を迂回できます。
-
-自動検出に失敗した場合は次の警告が出ます。
-
-```
-nat(slirp): ホストの外向きアドレスを特定できなかった。...
-```
-
-その場合は手動で回避してください。
-ダイアルアップ接続のプロパティ → ネットワーク → TCP/IPv4 → 詳細設定 →
-**「リモート ネットワークでデフォルト ゲートウェイを使う」のチェックを外す**。
+実装では libslirp の各ソケットに送信元 IPv4 と **`IP_UNICAST_IF`** を設定し、
+RAS のデフォルト経路へ NAT 通信が戻ることを防ぎます。
+送信元 IP の `bind()` だけでは、宛先に対する経路選択を固定できません。
+また、最初の UDP が即座に期限切れにならないよう、リンクアップ時に
+libslirp の時刻を更新してからパケットを処理します。
 
 ### 「エントリ ポイント slirp_pollfds_fill_socket が見つかりません」
 
@@ -357,6 +355,36 @@ src/net/            PPP / HDLC / 疑似 Ethernet / NAT / Winsock / 経路検出
 src/serial/         COM ポート入出力
 tests/              各モジュールの単体テスト
 ```
+
+---
+
+## 検証
+
+既存の `tests/test_nat.c` は PPP / HDLC / ARP / ループバック NAT を検証します。
+追加の `tests/test_slirp.c` は POSIX 上で **実際の libslirp** とローカルサーバーを
+使い、最初の UDP の往復と TCP ハンドシェイク・双方向ペイロードを確認します。
+
+```bash
+gcc -O2 -std=c99 -Wall -Wextra -Werror -DVMODEM_HAVE_LIBSLIRP -Iinclude -Isrc/net tests/test_slirp.c src/net/vm_nat.c src/net/vm_nat_slirp.c src/net/vm_nat_loopback.c src/net/vm_eth.c src/net/vm_hostroute.c src/net/vm_winsock.c src/core/vm_log.c src/core/vm_types.c -lslirp -pthread -lm -o test_slirp
+./test_slirp
+```
+
+Windows の制限・復元は RAS を切断した状態で、以下のヘルパーをビルドして
+**管理者 PowerShell** から確認できます (COM ポート不要)。
+
+```powershell
+New-Item -ItemType Directory -Force work
+gcc -O2 -std=c99 -Wall -Wextra -Werror -Iinclude tests/test_netguard_win32.c src/net/vm_netguard.c src/net/vm_winsock.c src/core/vm_log.c -lfwpuclnt -lole32 -lws2_32 -o work/test_netguard.exe
+powershell -ExecutionPolicy Bypass -File tests/test_netguard.ps1
+# IPv6 も到達できる環境の場合:
+# powershell -ExecutionPolicy Bypass -File tests/test_netguard.ps1 -IPv6 2606:4700:4700::1111
+```
+
+このテストはヘルパー自身の外向き通信、他プロセスの直接 TCP 接続の遮断と、
+正常終了・強制終了の両方での復元を確認します。
+実機ではさらに VModem を起動し、ダイアル前の通信不可 → RAS 接続後の DNS / HTTPS
+疎通 → RAS 切断後の通信不可 → VModem 終了後の LAN 復元を確認してください。
+有線のみ・Wi-Fi のみ・両方が有効な場合を対象にします。
 
 ---
 
