@@ -226,6 +226,7 @@ typedef struct {
     bool               outbound_valid;
     uint32_t           outbound_ifindex;
     bool               socket_error;
+    vm_hostroute_guard_t *route_guard;
 } slirp_impl_t;
 
 /* ==========================================================================
@@ -1014,6 +1015,10 @@ static vm_err_t slirp_be_open(vm_nat_t *n)
             free(si);
             return VM_ERR_NOTFOUND;
         }
+        if (vm_hostroute_guard_open(&si->route_guard, si->outbound_ifindex) != VM_OK) {
+            free(si);
+            return VM_ERR_IO;
+        }
 #endif
         if (out_ip) {
             si->outbound.sin_family = AF_INET;
@@ -1031,6 +1036,7 @@ static vm_err_t slirp_be_open(vm_nat_t *n)
     si->slirp = slirp_new(&cfg, &slirp_cb, si);
     if (si->slirp == NULL) {
         VM_LOGE("nat(slirp): slirp_new に失敗");
+        vm_hostroute_guard_close(si->route_guard);
         free(si);
         return VM_ERR_IO;
     }
@@ -1070,6 +1076,7 @@ static void slirp_be_close(vm_nat_t *n)
     if (si->slirp != NULL)
         slirp_cleanup(si->slirp);
 
+    vm_hostroute_guard_close(si->route_guard);
     free(si);
     n->impl = NULL;
 }
@@ -1082,6 +1089,11 @@ static vm_err_t slirp_be_send_frame(vm_nat_t *n, const uint8_t *frame, int len)
         return VM_ERR_STATE;
 
     if (si->socket_error) return VM_ERR_IO;
+#ifdef _WIN32
+    /* Check after RAS negotiation, before any bind/connect/send. A /0 can
+     * remain in route print while DisableDefaultRoutes makes it unusable. */
+    if (vm_hostroute_guard_ensure(si->route_guard) != VM_OK) return VM_ERR_IO;
+#endif
 
     /*
      * slirp_input は void。失敗を通知しない。
@@ -1158,6 +1170,12 @@ static int slirp_be_poll(vm_nat_t *n, int max_block_ms)
     /* ---- 段 2: 実際に待つ ---- */
     if (si->nfds > 0) {
         rc = VM_POLL(si->fds, si->nfds, (int)timeout);
+#ifdef _WIN32
+        if (rc == SOCKET_ERROR) {
+            VM_LOGE("nat(slirp): WSAPoll failed (%d)", WSAGetLastError());
+            si->socket_error = true;
+        }
+#endif
     } else {
         /*
          * 監視対象が無い。poll(NULL, 0, t) は POSIX では単なる sleep だが
@@ -1191,6 +1209,8 @@ static int slirp_be_poll(vm_nat_t *n, int max_block_ms)
      * エラー扱いされて接続が全部切れる。
      */
     slirp_pollfds_poll(si->slirp, (rc < 0) ? 1 : 0, cb_get_revents, si);
+
+    if (si->socket_error) return VM_ERR_IO;
 
     /* ---- タイマ処理 ---- */
     run_expired_timers(si);

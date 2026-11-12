@@ -605,7 +605,13 @@ static void pump_com(vm_modem_t *m, int timeout_ms, uint32_t now)
 {
     int n = vm_serial_read(m->ser, m->com_buf, (int)sizeof(m->com_buf),
                            timeout_ms);
-    if (n <= 0) return;
+    if (n < 0) {
+        VM_LOGE("modem: serial read failed; stopping instead of retrying endlessly");
+        m->failure = VM_ERR_IO;
+        m->stop = 1;
+        return;
+    }
+    if (n == 0) return;
 
     m->stats.com_rx_bytes += (uint64_t)n;
 
@@ -743,7 +749,10 @@ vm_err_t vm_modem_step(vm_modem_t *m)
 
         /* 唯一のブロック点 = NAT の poll */
         if (m->nat != NULL) {
-            (void)vm_nat_poll(m->nat, VM_MODEM_NAT_BLOCK_MS);
+            if (vm_nat_poll(m->nat, VM_MODEM_NAT_BLOCK_MS) < 0) {
+                m->failure = VM_ERR_IO;
+                m->stop = 1;
+            }
         } else {
             sleep_ms(5);
         }

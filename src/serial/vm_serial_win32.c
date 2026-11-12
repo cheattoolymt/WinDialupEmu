@@ -29,7 +29,7 @@
  * VModem は次の構成にする:
  *
  *   1. CreateFile に FILE_FLAG_OVERLAPPED を付ける (非同期 I/O)
- *   2. COMMTIMEOUTS を「即座に戻る」に設定
+ *   2. COMMTIMEOUTS を呼出しの待機時間に合わせて設定
  *   3. ReadFile を OVERLAPPED 付きで発行
  *      - 即完了すれば TRUE が返る
  *      - 保留なら FALSE + GetLastError()==ERROR_IO_PENDING
@@ -61,8 +61,8 @@
  * 何も無ければ 0 バイトで即座に戻る」を意味する。
  * MSDN に明記されている特別ケースで、他の値では実現できない。
  *
- * 我々は timeout_ms > 0 のときだけ WaitCommEvent 相当の待ちを
- * OVERLAPPED 側で行うので、ドライバのタイムアウトは常に「即戻り」で良い。
+ * timeout_ms > 0 では Multiplier=MAXDWORD、Constant=timeout_ms に切り替える。
+ * 即戻りのままだと空の ReadFile は成功し、OVERLAPPED の待機を通らない。
  *
  * ===========================================================================
  * 実装上の難所 (4): DCD を「出力」する側になる
@@ -341,6 +341,29 @@ int vm_serial_read_win32(vm_serial_t *s, void *buf, int len, int timeout_ms)
     DWORD err;
 
     if (!s->h) return VM_ERR_STATE;
+
+    /* COM reads must actually wait for the first byte in blocking mode.
+     * Named-pipe smoke tests use this wrapper too, but have no COM timeouts.
+     * See Microsoft COMMTIMEOUTS remarks (MAXDWORD/MAXDWORD/constant).
+     * No read is outstanding here, so changing mode is safe. */
+    if (s->backend == VM_SERIAL_BACKEND_WIN32COM &&
+        s->read_timeout_ms != timeout_ms) {
+        COMMTIMEOUTS to;
+        memset(&to, 0, sizeof(to));
+        to.ReadIntervalTimeout = MAXDWORD;
+        if (timeout_ms != 0) {
+            to.ReadTotalTimeoutMultiplier = MAXDWORD;
+            to.ReadTotalTimeoutConstant = timeout_ms > 0
+                ? (DWORD)timeout_ms : MAXDWORD - 1;
+        }
+        to.WriteTotalTimeoutConstant = 5000;
+        if (!SetCommTimeouts(s->h, &to)) {
+            VM_LOGW("SetCommTimeouts(read) failed (%lu)",
+                    (unsigned long)GetLastError());
+            return VM_ERR_IO;
+        }
+        s->read_timeout_ms = timeout_ms;
+    }
 
     ResetEvent(s->ov_read_ev);
     memset(&s->ov_read, 0, sizeof(s->ov_read));

@@ -73,7 +73,7 @@ pacman -S mingw-w64-x86_64-libslirp
 MinGW-w64 の環境で、リポジトリのルートで以下を実行します（1 行）。
 
 ```bash
-gcc -O2 -std=c99 -Wall -Wextra -Iinclude -DVMODEM_HAVE_LIBSLIRP src/main.c src/core/vm_config.c src/core/vm_log.c src/core/vm_ringbuf.c src/core/vm_types.c src/audio/vm_audio.c src/audio/vm_audio_null.c src/audio/vm_audio_wasapi.c src/dsp/vm_handshake.c src/dsp/vm_resample.c src/dsp/vm_tone.c src/dsp/vm_v34.c src/dsp/vm_v8.c src/modem/vm_at.c src/modem/vm_modem.c src/modem/vm_sequence.c src/net/vm_eth.c src/net/vm_hdlc.c src/net/vm_hostroute.c src/net/vm_netguard.c src/net/vm_nat.c src/net/vm_nat_loopback.c src/net/vm_nat_slirp.c src/net/vm_ppp.c src/net/vm_winsock.c src/serial/vm_serial.c src/serial/vm_serial_win32.c -o vmodem.exe -L. -lslirp -lws2_32 -liphlpapi -lole32 -lwinmm -lfwpuclnt -lm
+gcc -O2 -std=c99 -Wall -Wextra -Iinclude -DVMODEM_HAVE_LIBSLIRP src/main.c src/core/vm_config.c src/core/vm_log.c src/core/vm_ringbuf.c src/core/vm_types.c src/audio/vm_audio.c src/audio/vm_audio_null.c src/audio/vm_audio_wasapi.c src/dsp/vm_handshake.c src/dsp/vm_resample.c src/dsp/vm_tone.c src/dsp/vm_v34.c src/dsp/vm_v8.c src/modem/vm_at.c src/modem/vm_modem.c src/modem/vm_sequence.c src/net/vm_eth.c src/net/vm_hdlc.c src/net/vm_hostroute.c src/net/vm_routeguard.c src/net/vm_netguard.c src/net/vm_nat.c src/net/vm_nat_loopback.c src/net/vm_nat_slirp.c src/net/vm_ppp.c src/net/vm_winsock.c src/serial/vm_serial.c src/serial/vm_serial_win32.c -o vmodem.exe -L. -lslirp -lws2_32 -liphlpapi -lole32 -lwinmm -lfwpuclnt -lm
 ```
 
 ### リンクするライブラリの理由
@@ -405,3 +405,12 @@ libslirp は動的リンクのみで利用し、ソースを取り込んでい�
 本ソフトウェアは学習・懐古・検証を目的としたエミュレータです。
 実在の電話網には一切接続しません。設定する電話番号には**実在しない番号**を
 使用してください。
+
+### Windows 11 ネットワーク精査版 (2026-11-12)
+
+[精査結果と検証範囲](docs/win11-network-audit.md)。RAS接続後に物理NICの
+`DisableDefaultRoutes` が起動前から変更された場合、その項目だけを復元する。
+ルート表に既定経路が見えていても無効扱いとなるケースへの対策。
+COM待機時のCPU空回りと、シリアル/WSAPoll失敗の握り潰しも修正。
+IPv6 PPPとWindowsのDNSサーバー選択は今回変更していない。
+実Windowsでのインターネット到達はホスト試験では保証できない。

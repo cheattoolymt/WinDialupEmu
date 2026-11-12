@@ -44,6 +44,7 @@ struct vm_serial_s {
     HANDLE ov_write_ev;      /* 書き込み用                      */
     HANDLE cancel_ev;        /* 中断要求 (close 時に set)       */
     bool   read_pending;     /* ReadFile が ERROR_IO_PENDING 中 */
+    int read_timeout_ms;
     OVERLAPPED ov_read;
     OVERLAPPED ov_write;
 #endif

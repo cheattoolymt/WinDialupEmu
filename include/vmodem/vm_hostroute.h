@@ -3,6 +3,7 @@
 #define VMODEM_VM_HOSTROUTE_H
 #include <stdint.h>
 #include <stddef.h>
+#include "vmodem/vm_types.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -14,6 +15,10 @@ uint32_t vm_hostroute_pick_outbound_ip(uint32_t exclude_net,
                                       uint32_t exclude_mask,
                                       char *name_out, size_t name_size);
 uint32_t vm_hostroute_interface_index(uint32_t ip);
+typedef struct vm_hostroute_guard_s vm_hostroute_guard_t;
+vm_err_t vm_hostroute_guard_open(vm_hostroute_guard_t **out, uint32_t index);
+vm_err_t vm_hostroute_guard_ensure(vm_hostroute_guard_t *guard);
+void vm_hostroute_guard_close(vm_hostroute_guard_t *guard);
 #ifdef __cplusplus
 }
 #endif

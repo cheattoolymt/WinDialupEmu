@@ -47,7 +47,7 @@
  * という致命的な問題が起きる。VModem では
  *
  *   (a) FILE_FLAG_OVERLAPPED で開く
- *   (b) COMMTIMEOUTS を「読めるだけ読んで即戻る」に設定
+ *   (b) COMMTIMEOUTS を指定待機時間に合わせて設定
  *   (c) ReadFile が ERROR_IO_PENDING を返したら WaitForMultipleObjects で
  *       [I/O完了イベント, 終了要求イベント] の両方を待つ
  *   (d) 終了要求が先に来たら CancelIo() で読み込みを取り消す
