@@ -16,7 +16,7 @@ static void throughput(unsigned bps)
             vm_rate_t *q=direction?&down:&up;
             int len=0;
             const uint8_t *out;
-            while(q->count<VM_RATE_DEPTH) assert(vm_rate_push(q,p,1000,(uint64_t)i*1000000));
+            while(q->count<VM_RATE_BULK_DEPTH) assert(vm_rate_push(q,p,1000,(uint64_t)i*1000000));
             out=vm_rate_pop(q,&len,(uint64_t)i*1000000);
             if(out) { assert(len==1000 && out[0]==0xa5 && out[999]==0xa5);bytes[direction]+=len; }
             assert(bytes[direction]*8 <= (uint64_t)bps*i/1000);
@@ -36,7 +36,7 @@ int main(void)
     /* Idle time never earns an instant first packet. */
     assert(vm_rate_push(&q,p,1500,100000000000ULL));
     assert(!vm_rate_pop(&q,&n,100000000000ULL));
-    for(i=1;i<VM_RATE_DEPTH;++i)assert(vm_rate_push(&q,p,1500,100000000000ULL));
+    for(i=1;i<VM_RATE_BULK_DEPTH;++i)assert(vm_rate_push(&q,p,1500,100000000000ULL));
     assert(!vm_rate_push(&q,p,1500,100000000000ULL) && q.drops==1);
     /* A long stall cannot release the entire queue at once. */
     assert(vm_rate_pop(&q,&n,200000000000ULL));

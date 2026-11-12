@@ -12,3 +12,5 @@ work/windows-models/routeguard
 work/windows-models/serial_wait
 "$cc" -std=c99 -Wall -Wextra -Werror -Iinclude tests/test_rate.c src/net/vm_rate.c -o work/windows-models/rate
 work/windows-models/rate
+"$cc" -std=c99 -Wall -Wextra -Werror -Iinclude tests/test_rate_congestion.c src/net/vm_rate.c -o work/windows-models/rate_congestion
+work/windows-models/rate_congestion

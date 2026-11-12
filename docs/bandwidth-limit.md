@@ -12,9 +12,12 @@ most 4200 bytes/s in each direction; TCP/UDP payload is lower due to headers.
 PPP/HDLC overhead is not charged separately. Control protocols (LCP/IPCP,
 termination and echoes) stay responsive and are not queued behind data.
 
-Memory is bounded to eight packets of up to 1600 bytes per direction. A full
-queue drops new packets instead of allocating unlimited memory. TCP retransmits
-and slows; UDP loss is expected under saturation. No idle-time credits or
+Memory is bounded to 32 packets of up to 1600 bytes per direction, with at
+most 24 bulk packets. DNS and TCP control/ACK packets have reserved capacity
+and priority after the in-flight packet. They consume the SAME bandwidth
+budget. Bulk flows are serviced cyclically by flow key; a new flow can replace
+a packet from an overrepresented flow. A full queue still drops packets
+instead of allocating unlimited memory. TCP retransmits; UDP loss is possible. No idle-time credits or
 catch-up bursts are accumulated. Reconnect and hangup clear both queues.
 IPv4 with the none backend is discarded as before. WFP isolation is unchanged.
 
@@ -38,3 +41,18 @@ Tests:
 Actual Windows/fast.com measurements require the affected machine. Very slow
 pages may load slowly by design. The existing Internet-connectivity and route
 eligibility fixes are retained.
+
+
+## Congestion regression correction
+
+The first bandwidth build could drop DNS and TCP connection setup behind a
+full eight-packet FIFO. Its simple throughput and isolated ping tests did not
+cover a busy Windows host. The new tests fill bulk capacity, insert DNS/ACK,
+verify DNS release before its 2-second timeout at 33.6kbps, verify the aggregate
+bit budget, and verify that new bulk flows are admitted and serviced despite
+a saturated existing flow. LAN discovery multicast/limited broadcasts are
+not forwarded over this IPv4 Internet NAT and no longer consume uplink budget.
+The packet already being serialized is never interrupted or reordered.
+No Windows socket settings or WFP policy were changed by this correction.
+Affected Windows browsing still needs verification; this is not a claim that
+all workloads can complete quickly through a 33.6kbps connection.

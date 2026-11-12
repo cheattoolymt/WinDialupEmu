@@ -158,7 +158,7 @@ static int cb_ppp_write(void *user, const uint8_t *data, int len)
 static void cb_ppp_ip(void *user, const uint8_t *pkt, int len)
 {
     vm_modem_t *m = (vm_modem_t *)user;
-    if (m->nat == NULL) return;
+    if (m->nat == NULL || !vm_rate_forwardable(pkt, len)) return;
     (void)vm_rate_push(&m->uplink, pkt, len, (uint64_t)vm_nat_now_ns());
 }
 
