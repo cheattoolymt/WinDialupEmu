@@ -10,3 +10,5 @@ work/windows-models/routeguard
  -Itests/fake-serial -Iinclude -Isrc/serial tests/test_serial_wait.c \
  src/serial/vm_serial_win32.c -Wl,--gc-sections -o work/windows-models/serial_wait
 work/windows-models/serial_wait
+"$cc" -std=c99 -Wall -Wextra -Werror -Iinclude tests/test_rate.c src/net/vm_rate.c -o work/windows-models/rate
+work/windows-models/rate

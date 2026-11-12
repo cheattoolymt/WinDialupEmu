@@ -24,6 +24,7 @@
 #include "vmodem/vm_nat.h"
 #include "vmodem/vm_log.h"
 #include "vmodem/vm_netguard.h"
+#include "vmodem/vm_rate.h"
 
 #ifdef _WIN32
 #  include <windows.h>
@@ -64,6 +65,7 @@ struct vm_modem_s {
     vm_at_t        at;
     vm_sequence_t  seq;
     vm_ppp_t       ppp;
+    vm_rate_t      uplink, downlink;
 
     vm_modem_state_t state;
 
@@ -157,12 +159,7 @@ static void cb_ppp_ip(void *user, const uint8_t *pkt, int len)
 {
     vm_modem_t *m = (vm_modem_t *)user;
     if (m->nat == NULL) return;
-    vm_err_t rc = vm_nat_input_ip(m->nat, pkt, len);
-    if (rc == VM_ERR_IO || rc == VM_ERR_STATE) {
-        VM_LOGE("modem: NAT 送信エラー。接続を終了します");
-        m->failure = rc;
-        m->stop = 1;
-    }
+    (void)vm_rate_push(&m->uplink, pkt, len, (uint64_t)vm_nat_now_ns());
 }
 
 /* --------------------------------------------------------------------------
@@ -172,7 +169,31 @@ static void cb_nat_ip(void *user, const uint8_t *pkt, int len)
 {
     vm_modem_t *m = (vm_modem_t *)user;
     if (m->state != VM_MODEM_DATA) return;   /* 回線が無い間は捨てる */
-    (void)vm_ppp_send_ip(&m->ppp, pkt, len);
+    (void)vm_rate_push(&m->downlink, pkt, len, (uint64_t)vm_nat_now_ns());
+}
+
+/* Called only by the modem loop: callbacks enqueue and never sleep or
+ * recursively enter NAT. LCP/IPCP remain responsive on the control path. */
+static void pump_link(vm_modem_t *m)
+{
+    int len;
+    const uint8_t *packet;
+    packet = vm_rate_pop(&m->uplink, &len, (uint64_t)vm_nat_now_ns());
+    if (packet) {
+        vm_err_t rc = vm_nat_input_ip(m->nat, packet, len);
+        if (rc == VM_ERR_IO || rc == VM_ERR_STATE) {
+            VM_LOGE("modem: paced NAT send failed");
+            m->failure = rc;
+            m->stop = 1;
+            return;
+        }
+    }
+    packet = vm_rate_pop(&m->downlink, &len, (uint64_t)vm_nat_now_ns());
+    if (packet && vm_ppp_send_ip(&m->ppp, packet, len) < 0) {
+        VM_LOGE("modem: paced PPP send failed");
+        m->failure = VM_ERR_IO;
+        m->stop = 1;
+    }
 }
 
 /* --------------------------------------------------------------------------
@@ -392,6 +413,10 @@ static void do_hangup(vm_modem_t *m, bool emit_no_carrier)
         vm_ppp_close(&m->ppp, false, now);
         if (m->nat != NULL) vm_nat_link_down(m->nat);
     }
+    VM_LOGI("modem: rate queue drops up=%llu down=%llu",
+            (unsigned long long)m->uplink.drops, (unsigned long long)m->downlink.drops);
+    vm_rate_reset(&m->uplink, 0);
+    vm_rate_reset(&m->downlink, 0);
     vm_sequence_abort(&m->seq);
     if (m->aud != NULL) vm_audio_flush(m->aud);
 
@@ -427,6 +452,9 @@ static void enter_data_mode(vm_modem_t *m)
     flush_at_responses(m);
     vm_serial_flush(m->ser);      /* ★ CONNECT を確実に相手へ届ける ★ */
 
+    vm_rate_reset(&m->uplink, (uint32_t)m->bps);
+    vm_rate_reset(&m->downlink, (uint32_t)m->bps);
+    VM_LOGI("modem: IPv4 bandwidth capped at %d bit/s independently in each direction", m->bps);
     build_ppp_cfg(m, m->isp, &pc);
     if (vm_ppp_init(&m->ppp, &pc, cb_ppp_write, m, cb_ppp_ip, m, now) != VM_OK) {
         VM_LOGE("modem: PPP を初期化できない");
@@ -747,6 +775,8 @@ vm_err_t vm_modem_step(vm_modem_t *m)
             break;
         }
 
+        pump_link(m);
+        if (m->stop) break;
         /* 唯一のブロック点 = NAT の poll */
         if (m->nat != NULL) {
             if (vm_nat_poll(m->nat, VM_MODEM_NAT_BLOCK_MS) < 0) {
@@ -756,6 +786,7 @@ vm_err_t vm_modem_step(vm_modem_t *m)
         } else {
             sleep_ms(5);
         }
+        if (!m->stop) pump_link(m);
         break;
 
     /* ---------------------------------------------------------------- */

@@ -73,7 +73,7 @@ pacman -S mingw-w64-x86_64-libslirp
 MinGW-w64 の環境で、リポジトリのルートで以下を実行します（1 行）。
 
 ```bash
-gcc -O2 -std=c99 -Wall -Wextra -Iinclude -DVMODEM_HAVE_LIBSLIRP src/main.c src/core/vm_config.c src/core/vm_log.c src/core/vm_ringbuf.c src/core/vm_types.c src/audio/vm_audio.c src/audio/vm_audio_null.c src/audio/vm_audio_wasapi.c src/dsp/vm_handshake.c src/dsp/vm_resample.c src/dsp/vm_tone.c src/dsp/vm_v34.c src/dsp/vm_v8.c src/modem/vm_at.c src/modem/vm_modem.c src/modem/vm_sequence.c src/net/vm_eth.c src/net/vm_hdlc.c src/net/vm_hostroute.c src/net/vm_routeguard.c src/net/vm_netguard.c src/net/vm_nat.c src/net/vm_nat_loopback.c src/net/vm_nat_slirp.c src/net/vm_ppp.c src/net/vm_winsock.c src/serial/vm_serial.c src/serial/vm_serial_win32.c -o vmodem.exe -L. -lslirp -lws2_32 -liphlpapi -lole32 -lwinmm -lfwpuclnt -lm
+gcc -O2 -std=c99 -Wall -Wextra -Iinclude -DVMODEM_HAVE_LIBSLIRP src/main.c src/core/vm_config.c src/core/vm_log.c src/core/vm_ringbuf.c src/core/vm_types.c src/audio/vm_audio.c src/audio/vm_audio_null.c src/audio/vm_audio_wasapi.c src/dsp/vm_handshake.c src/dsp/vm_resample.c src/dsp/vm_tone.c src/dsp/vm_v34.c src/dsp/vm_v8.c src/modem/vm_at.c src/modem/vm_modem.c src/modem/vm_sequence.c src/net/vm_eth.c src/net/vm_hdlc.c src/net/vm_hostroute.c src/net/vm_routeguard.c src/net/vm_rate.c src/net/vm_netguard.c src/net/vm_nat.c src/net/vm_nat_loopback.c src/net/vm_nat_slirp.c src/net/vm_ppp.c src/net/vm_winsock.c src/serial/vm_serial.c src/serial/vm_serial_win32.c -o vmodem.exe -L. -lslirp -lws2_32 -liphlpapi -lole32 -lwinmm -lfwpuclnt -lm
 ```
 
 ### リンクするライブラリの理由
@@ -414,3 +414,10 @@ libslirp は動的リンクのみで利用し、ソースを取り込んでい�
 COM待機時のCPU空回りと、シリアル/WSAPoll失敗の握り潰しも修正。
 IPv6 PPPとWindowsのDNSサーバー選択は今回変更していない。
 実Windowsでのインターネット到達はホスト試験では保証できない。
+
+### 実転送速度の制限
+
+接続速度を表示するだけだった不具合を修正し、IPv4パケットの上り・下りを
+それぞれ交渉速度に制限する。33.6Kbpsなら各方向最大約4.2KB/秒で、
+アプリの実データ速度はヘッダー分だけ下がる。有線LANの1Gbps表示は変わらない。
+[方式・試験・制限](docs/bandwidth-limit.md)を参照。

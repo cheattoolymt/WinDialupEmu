@@ -48,3 +48,12 @@ if [[ ${1:-} == --slirp ]]; then
         "${slirp_libs[@]}" -pthread -lm -o work/baseline-tests/test_slirp
     (cd work/baseline-tests && ./test_slirp) | tee work/baseline-tests/test_slirp.log
 fi
+
+rate_objects=()
+for object in "${objects[@]}"; do
+    [[ $object == */modem/vm_modem.o ]] || rate_objects+=("$object")
+done
+"$cc" -O2 -std=c99 -Wall -Wextra -Werror -Iinclude -Isrc/net \
+    tests/test_modem_rate.c "${rate_objects[@]}" -pthread -lm \
+    -o work/baseline-tests/test_modem_rate
+work/baseline-tests/test_modem_rate
