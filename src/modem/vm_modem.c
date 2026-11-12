@@ -66,6 +66,8 @@ struct vm_modem_s {
     vm_sequence_t  seq;
     vm_ppp_t       ppp;
     vm_rate_t      uplink, downlink;
+    uint32_t rate_report_ms;
+    uint64_t report_up, report_down;
 
     vm_modem_state_t state;
 
@@ -194,6 +196,20 @@ static void pump_link(vm_modem_t *m)
         m->failure = VM_ERR_IO;
         m->stop = 1;
     }
+}
+
+static void report_rate(vm_modem_t *m, uint32_t now)
+{
+    uint32_t elapsed=now-m->rate_report_ms;
+    if(elapsed<10000)return;
+    VM_LOGI("rate: elapsed_ms=%lu up_bps=%llu down_bps=%llu queued_up=%lu queued_down=%lu drops_up=%llu drops_down=%llu duplicates_up=%llu duplicates_down=%llu",
+            (unsigned long)elapsed,
+            (unsigned long long)((m->uplink.sent_bytes-m->report_up)*8000/elapsed),
+            (unsigned long long)((m->downlink.sent_bytes-m->report_down)*8000/elapsed),
+            (unsigned long)m->uplink.count,(unsigned long)m->downlink.count,
+            (unsigned long long)m->uplink.drops,(unsigned long long)m->downlink.drops,
+            (unsigned long long)m->uplink.duplicates,(unsigned long long)m->downlink.duplicates);
+    m->rate_report_ms=now;m->report_up=m->uplink.sent_bytes;m->report_down=m->downlink.sent_bytes;
 }
 
 /* --------------------------------------------------------------------------
@@ -452,6 +468,7 @@ static void enter_data_mode(vm_modem_t *m)
     flush_at_responses(m);
     vm_serial_flush(m->ser);      /* ★ CONNECT を確実に相手へ届ける ★ */
 
+    m->rate_report_ms=now; m->report_up=m->report_down=0;
     vm_rate_reset(&m->uplink, (uint32_t)m->bps);
     vm_rate_reset(&m->downlink, (uint32_t)m->bps);
     VM_LOGI("modem: IPv4 bandwidth capped at %d bit/s independently in each direction", m->bps);
@@ -787,6 +804,7 @@ vm_err_t vm_modem_step(vm_modem_t *m)
             sleep_ms(5);
         }
         if (!m->stop) pump_link(m);
+        report_rate(m, vm_modem_now_ms());
         break;
 
     /* ---------------------------------------------------------------- */

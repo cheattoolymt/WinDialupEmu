@@ -4,8 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 /* Full packets only, bounded memory, one independent serializer per direction. */
-#define VM_RATE_DEPTH 32
-#define VM_RATE_BULK_DEPTH 24
+#define VM_RATE_DEPTH 128
+#define VM_RATE_BULK_DEPTH 96
 #define VM_RATE_MTU 1600
 typedef struct {
     uint8_t bytes[VM_RATE_MTU];
@@ -18,6 +18,7 @@ typedef struct {
     uint8_t output[VM_RATE_MTU];
     uint32_t bps, count;
     uint64_t due_ns, drops, last_flow;
+    uint64_t sent_bytes, sent_packets, duplicates;
 } vm_rate_t;
 bool vm_rate_forwardable(const uint8_t *data, int len);
 void vm_rate_reset(vm_rate_t *q, uint32_t bps);

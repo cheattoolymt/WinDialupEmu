@@ -47,6 +47,11 @@ if [[ ${1:-} == --slirp ]]; then
         -Iinclude -Isrc/net tests/test_slirp.c "${sources[@]}" \
         "${slirp_libs[@]}" -pthread -lm -o work/baseline-tests/test_slirp
     (cd work/baseline-tests && ./test_slirp) | tee work/baseline-tests/test_slirp.log
+    "$cc" -O2 -std=c99 -Wall -Wextra -Werror -DVMODEM_HAVE_LIBSLIRP \
+        -Iinclude -Isrc/net tests/test_slirp_rate.c "${sources[@]}" \
+        "${slirp_libs[@]}" -pthread -lm -o work/baseline-tests/test_slirp_rate
+    (cd work/baseline-tests && ./test_slirp_rate) | tee work/baseline-tests/test_slirp_rate.log
+
 fi
 
 rate_objects=()

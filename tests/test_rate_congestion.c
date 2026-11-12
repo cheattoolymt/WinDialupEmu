@@ -14,8 +14,8 @@ int main(void)
     dns[0]=0x45;dns[9]=17;dns[16]=8;dns[19]=8;dns[23]=53;
     ack[0]=0x45;ack[9]=6;ack[16]=1;ack[19]=1;ack[32]=0x50;ack[33]=0x10;
     vm_rate_reset(&q,33600);
-    for(i=0;i<VM_RATE_BULK_DEPTH;++i)assert(vm_rate_push(&q,bulk,sizeof(bulk),now));
-    assert(!vm_rate_push(&q,bulk,sizeof(bulk),now));
+    for(i=0;i<VM_RATE_BULK_DEPTH;++i){bulk[27]=(uint8_t)i;assert(vm_rate_push(&q,bulk,sizeof(bulk),now));}
+    bulk[27]=200;assert(!vm_rate_push(&q,bulk,sizeof(bulk),now));
     assert(vm_rate_push(&q,dns,sizeof(dns),now));
     assert(vm_rate_push(&q,ack,sizeof(ack),now));
     /* Bulk has several seconds queued, DNS must finish within a 2s timeout. */
@@ -35,7 +35,7 @@ int main(void)
     }
     assert(!q.count);
     vm_rate_reset(&q,33600);
-    for(i=0;i<VM_RATE_BULK_DEPTH;++i)assert(vm_rate_push(&q,bulk,sizeof(bulk),0));
+    for(i=0;i<VM_RATE_BULK_DEPTH;++i){bulk[27]=(uint8_t)i;assert(vm_rate_push(&q,bulk,sizeof(bulk),0));}
     bulk[19]=2;assert(vm_rate_push(&q,bulk,sizeof(bulk),0));
     bulk[19]=3;assert(vm_rate_push(&q,bulk,sizeof(bulk),0));
     { unsigned seen=0;
@@ -45,6 +45,13 @@ int main(void)
       }
       assert(seen==14); /* The old bulk flow cannot starve either newcomer. */
     }
+    vm_rate_reset(&q,33600);
+    bulk[19]=1;bulk[27]=42;
+    assert(vm_rate_push(&q,bulk,sizeof(bulk),0));
+    assert(vm_rate_push(&q,bulk,sizeof(bulk),1000));
+    assert(q.count==1 && q.duplicates==1); /* Same TCP bytes are not sent twice. */
+    bulk[27]=43;assert(vm_rate_push(&q,bulk,sizeof(bulk),1000));
+    assert(q.count==2);
     assert(vm_rate_forwardable(dns,sizeof(dns)));
     dns[16]=224;assert(!vm_rate_forwardable(dns,sizeof(dns)));
     dns[16]=239;assert(!vm_rate_forwardable(dns,sizeof(dns)));

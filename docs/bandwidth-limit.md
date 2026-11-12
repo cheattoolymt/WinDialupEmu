@@ -12,8 +12,8 @@ most 4200 bytes/s in each direction; TCP/UDP payload is lower due to headers.
 PPP/HDLC overhead is not charged separately. Control protocols (LCP/IPCP,
 termination and echoes) stay responsive and are not queued behind data.
 
-Memory is bounded to 32 packets of up to 1600 bytes per direction, with at
-most 24 bulk packets. DNS and TCP control/ACK packets have reserved capacity
+Memory is bounded to 128 packets of up to 1600 bytes per direction, with at
+most 96 bulk packets. DNS and TCP control/ACK packets have reserved capacity
 and priority after the in-flight packet. They consume the SAME bandwidth
 budget. Bulk flows are serviced cyclically by flow key; a new flow can replace
 a packet from an overrepresented flow. A full queue still drops packets
@@ -56,3 +56,25 @@ The packet already being serialized is never interrupted or reordered.
 No Windows socket settings or WFP policy were changed by this correction.
 Affected Windows browsing still needs verification; this is not a claim that
 all workloads can complete quickly through a 33.6kbps connection.
+
+
+## TCP retransmission efficiency correction
+
+A real-clock, local 100KB TCP transfer using libslirp and the bandwidth queue
+reproduced the previous queue overflow: 12 packet drops, 37.316s, 2680 B/s.
+The same test with bounded additional burst capacity and queued retransmission
+deduplication completed with zero drops in 24.527s, 4077 B/s. These are Linux
+single-flow results, not a reproduction of the user's exact Windows 256 B/s.
+
+TCP packets carrying an already queued identical byte range are coalesced,
+ignoring mutable IP IDs/checksums/timestamps. Different sequence numbers or
+payload remain separate. Retransmissions of bytes already delivered are not
+suppressed. Priority, flow service and the aggregate bit budget remain intact.
+
+The modem now reports aggregate upload/download bits per second, queue sizes,
+cumulative drops and coalesced retransmissions every 10 seconds. If the aggregate
+is near 33600 bit/s but one curl is slow, other flows share the link. If the
+aggregate is low, the new counters help distinguish starvation from losses.
+A small isolated packet echo and an artificial rate-budget test alone did not
+catch this full TCP-window/retransmission failure mode; test_slirp_rate.c now
+exercises the real transport and fails below 3200 B/s for a local single flow.

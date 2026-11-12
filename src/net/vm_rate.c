@@ -31,6 +31,22 @@ static uint64_t flow_key(const uint8_t *p, int len)
         for(i=h;i<h+4;++i)hash=(hash^p[i])*1099511628211ULL;
     return hash;
 }
+/* Compare TCP byte ranges, ignoring mutable IP IDs, checksums and timestamps.
+ * Already queued retransmissions must not consume the slow link twice. */
+static bool same_tcp_data(const vm_rate_packet_t *old, const uint8_t *p, int len)
+{
+    unsigned h, t, oh, ot, data_len;
+    const uint8_t *o=old->bytes;
+    if(len<40 || old->length<40 || p[9]!=6 || o[9]!=6)return false;
+    h=(p[0]&15)*4u;oh=(o[0]&15)*4u;
+    if(h<20 || oh<20 || h+20>(unsigned)len || oh+20>old->length)return false;
+    if((p[6]&31)||p[7]||(o[6]&31)||o[7])return false;
+    t=(p[h+12]>>4)*4u;ot=(o[oh+12]>>4)*4u;
+    if(t<20 || ot<20 || h+t>=(unsigned)len || oh+ot>=old->length)return false;
+    data_len=(unsigned)len-h-t;
+    if(data_len!=old->length-oh-ot || (p[h+13]&7)!=(o[oh+13]&7))return false;
+    return !memcmp(p+h,o+oh,8) && !memcmp(p+h+t,o+oh+ot,data_len);
+}
 void vm_rate_reset(vm_rate_t *q, uint32_t bps)
 { memset(q,0,sizeof(*q));q->bps=bps; }
 bool vm_rate_forwardable(const uint8_t *p, int len)
@@ -48,6 +64,9 @@ bool vm_rate_push(vm_rate_t *q, const uint8_t *data, int len, uint64_t now_ns)
     vm_rate_packet_t *p;
     if(!q->bps || !data || len<=0 || len>VM_RATE_MTU) {++q->drops;return false;}
     urgent=priority(data,len);flow=flow_key(data,len);
+    for(i=0;i<q->count;++i)if(q->packets[i].flow==flow && same_tcp_data(&q->packets[i],data,len)) {
+        ++q->duplicates;return true;
+    }
     for(i=0;i<q->count;++i)if(!q->packets[i].priority)++bulk;
     if(!urgent && (bulk>=VM_RATE_BULK_DEPTH || q->count==VM_RATE_DEPTH)) {
         bool existing=false;
@@ -88,6 +107,8 @@ const uint8_t *vm_rate_pop(vm_rate_t *q, int *len, uint64_t now_ns)
 {
     if(!q->count || now_ns<q->due_ns)return NULL;
     *len=q->packets[0].length;
+    q->sent_bytes+=(unsigned)*len;
+    ++q->sent_packets;
     memcpy(q->output,q->packets[0].bytes,(size_t)*len);
     if(!q->packets[0].priority)q->last_flow=q->packets[0].flow;
     --q->count;
